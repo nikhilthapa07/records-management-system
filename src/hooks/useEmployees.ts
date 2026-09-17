@@ -1,15 +1,16 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import {
+  useMutation,
+  useQuery,
+  useQueryClient,
+} from '@tanstack/react-query'
+import { useCallback, useMemo, useState } from 'react'
 import {
   createEmployee as apiCreateEmployee,
   deleteEmployee as apiDeleteEmployee,
   fetchEmployees,
   updateEmployee as apiUpdateEmployee,
 } from '../services/employeeApi'
-import type {
-  Employee,
-  EmployeesState,
-  NewEmployee,
-} from '../types/employee'
+import type { Employee, NewEmployee } from '../types/employee'
 
 /**
  * Several employees per page makes the virtualized table (and the pagination
@@ -17,9 +18,15 @@ import type {
  */
 const PAGE_SIZE = 25
 
+const EMPLOYEES_KEY = ['employees'] as const
+
+function messageFrom(error: unknown, fallback: string): string {
+  return error instanceof Error ? error.message : fallback
+}
+
 export interface UseEmployeesReturn {
   employees: Employee[]
-  status: EmployeesState['status']
+  status: 'loading' | 'success' | 'error'
   error: string | null
   retry: () => void
 
@@ -51,51 +58,47 @@ export interface UseEmployeesReturn {
 }
 
 export function useEmployees(): UseEmployeesReturn {
-  const [state, setState] = useState<EmployeesState>({
-    employees: [],
-    status: 'loading',
-    error: null,
-  })
-  const [reloadKey, setReloadKey] = useState(0)
+  const queryClient = useQueryClient()
 
+  // ----- Fetch (server state) ----------------------------------------------
+  const employeesQuery = useQuery({
+    queryKey: EMPLOYEES_KEY,
+    queryFn: fetchEmployees,
+    retry: 1,
+    refetchOnWindowFocus: false,
+    staleTime: 5 * 60_000,
+  })
+
+  const employees = useMemo(() => employeesQuery.data ?? [], [employeesQuery.data])
+  const status: 'loading' | 'success' | 'error' = employeesQuery.isPending
+    ? 'loading'
+    : employeesQuery.isError
+      ? 'error'
+      : 'success'
+  const error = employeesQuery.error
+    ? messageFrom(employeesQuery.error, 'Something went wrong.')
+    : null
+  const retry = useCallback(() => {
+    void employeesQuery.refetch()
+  }, [employeesQuery])
+
+  // ----- Local UI state (search / filter / pagination) ----------------------
   const [searchQuery, setSearchQuery] = useState('')
   const [selectedDepartments, setSelectedDepartments] = useState<string[]>([])
   const [currentPage, setCurrentPage] = useState(1)
 
-  const [isSaving, setIsSaving] = useState(false)
-  const [isDeleting, setIsDeleting] = useState(false)
-  const [deletingId, setDeletingId] = useState<number | null>(null)
+  // ----- Mutation metadata ---------------------------------------------------
   const [actionError, setActionError] = useState<string | null>(null)
+  const clearActionError = useCallback(() => setActionError(null), [])
 
-  const retry = useCallback(() => {
-    setState((previous) => ({ ...previous, status: 'loading', error: null }))
-    setReloadKey((key) => key + 1)
-  }, [])
+  const addMutation = useMutation({ mutationFn: apiCreateEmployee })
+  const updateMutation = useMutation({
+    mutationFn: ({ id, input }: { id: number; input: NewEmployee }) =>
+      apiUpdateEmployee(id, input),
+  })
+  const deleteMutation = useMutation({ mutationFn: apiDeleteEmployee })
 
-  useEffect(() => {
-    let cancelled = false
-
-    fetchEmployees()
-      .then((result) => {
-        if (!cancelled) {
-          setState({ employees: result, status: 'success', error: null })
-        }
-      })
-      .catch((error: unknown) => {
-        const message =
-          error instanceof Error ? error.message : 'Something went wrong.'
-        if (!cancelled) {
-          setState({ employees: [], status: 'error', error: message })
-        }
-      })
-
-    return () => {
-      cancelled = true
-    }
-  }, [reloadKey])
-
-  const employees = state.employees
-
+  // ----- Derived state -------------------------------------------------------
   const departments = useMemo(
     () =>
       Array.from(new Set(employees.map((employee) => employee.department))).sort(
@@ -182,77 +185,69 @@ export function useEmployees(): UseEmployeesReturn {
     return `Showing ${start}–${end} of ${filteredEmployees.length}`
   }, [filteredEmployees.length, currentPage, totalPages])
 
+  // ----- Mutations (write server state back into the cache) ------------------
   const addEmployee = useCallback(
     async (input: NewEmployee) => {
-      setIsSaving(true)
       setActionError(null)
       try {
-        const created = await apiCreateEmployee(input)
-        setState((previous) => ({
-          ...previous,
-          employees: [...previous.employees, created],
-        }))
+        const created = await addMutation.mutateAsync(input)
+        queryClient.setQueryData<Employee[]>(EMPLOYEES_KEY, (previous) => [
+          ...(previous ?? []),
+          created,
+        ])
         goToPage(1)
-      } catch (error) {
+      } catch (mutationError) {
         setActionError(
-          error instanceof Error ? error.message : 'Could not add the record.',
+          messageFrom(mutationError, 'Could not add the record.'),
         )
-        throw error
-      } finally {
-        setIsSaving(false)
+        throw mutationError
       }
     },
-    [goToPage],
+    [addMutation, queryClient, goToPage],
   )
 
-  const updateEmployee = useCallback(async (id: number, input: NewEmployee) => {
-    setIsSaving(true)
-    setActionError(null)
-    try {
-      const updated = await apiUpdateEmployee(id, input)
-      setState((previous) => ({
-        ...previous,
-        employees: previous.employees.map((employee) =>
-          employee.id === id ? updated : employee,
-        ),
-      }))
-    } catch (error) {
-      setActionError(
-        error instanceof Error ? error.message : 'Could not save the changes.',
-      )
-      throw error
-    } finally {
-      setIsSaving(false)
-    }
-  }, [])
+  const updateEmployee = useCallback(
+    async (id: number, input: NewEmployee) => {
+      setActionError(null)
+      try {
+        const updated = await updateMutation.mutateAsync({ id, input })
+        queryClient.setQueryData<Employee[]>(EMPLOYEES_KEY, (previous) =>
+          (previous ?? []).map((employee) =>
+            employee.id === updated.id ? updated : employee,
+          ),
+        )
+      } catch (mutationError) {
+        setActionError(
+          messageFrom(mutationError, 'Could not save the changes.'),
+        )
+        throw mutationError
+      }
+    },
+    [updateMutation, queryClient],
+  )
 
-  const removeEmployee = useCallback(async (id: number) => {
-    setDeletingId(id)
-    setIsDeleting(true)
-    setActionError(null)
-    try {
-      await apiDeleteEmployee(id)
-      setState((previous) => ({
-        ...previous,
-        employees: previous.employees.filter((employee) => employee.id !== id),
-      }))
-    } catch (error) {
-      setActionError(
-        error instanceof Error ? error.message : 'Could not delete the record.',
-      )
-      throw error
-    } finally {
-      setDeletingId(null)
-      setIsDeleting(false)
-    }
-  }, [])
-
-  const clearActionError = useCallback(() => setActionError(null), [])
+  const removeEmployee = useCallback(
+    async (id: number) => {
+      setActionError(null)
+      try {
+        await deleteMutation.mutateAsync(id)
+        queryClient.setQueryData<Employee[]>(EMPLOYEES_KEY, (previous) =>
+          (previous ?? []).filter((employee) => employee.id !== id),
+        )
+      } catch (mutationError) {
+        setActionError(
+          messageFrom(mutationError, 'Could not delete the record.'),
+        )
+        throw mutationError
+      }
+    },
+    [deleteMutation, queryClient],
+  )
 
   return {
     employees,
-    status: state.status,
-    error: state.error,
+    status,
+    error,
     retry,
 
     departments,
@@ -272,9 +267,9 @@ export function useEmployees(): UseEmployeesReturn {
     nextPage,
     showingLabel,
 
-    isSaving,
-    isDeleting,
-    deletingId,
+    isSaving: addMutation.isPending || updateMutation.isPending,
+    isDeleting: deleteMutation.isPending,
+    deletingId: deleteMutation.isPending ? deleteMutation.variables : null,
     actionError,
     clearActionError,
     addEmployee,
