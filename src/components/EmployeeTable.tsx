@@ -1,4 +1,12 @@
-import { memo, useCallback, useMemo, type CSSProperties } from 'react'
+import {
+  memo,
+  useCallback,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+} from 'react'
 import { getScrollbarSize, List } from 'react-window'
 import {
   AlertTriangle,
@@ -13,7 +21,6 @@ import type { Employee, EmployeesState } from '../types/employee'
 import { Loading } from './Loading'
 
 const ROW_HEIGHT = 56
-const MAX_LIST_HEIGHT = 640
 const ROW_GAP = '0.75rem'
 const ROW_PADDING_X = '1rem'
 // Shared grid template keeps the fixed header and every virtualized row aligned
@@ -206,6 +213,29 @@ export function EmployeeTable(props: EmployeeTableProps) {
     [employees, onEdit, onDelete, isDeleting, deletingId],
   )
 
+  // The list fills whatever vertical space the layout leaves it (the page itself
+  // never scrolls), so the virtualizer's height is measured rather than fixed.
+  const listAreaRef = useRef<HTMLDivElement>(null)
+  const [availableHeight, setAvailableHeight] = useState(640)
+
+  useLayoutEffect(() => {
+    const measure = () => {
+      const height = listAreaRef.current?.clientHeight
+      if (height) {
+        setAvailableHeight((previous) =>
+          Math.abs(height - previous) > 1 ? height : previous,
+        )
+      }
+    }
+    measure()
+    if (typeof ResizeObserver === 'undefined') return
+    const observer = new ResizeObserver(measure)
+    if (listAreaRef.current) observer.observe(listAreaRef.current)
+    return () => observer.disconnect()
+  }, [])
+
+  const listHeight = Math.min(employees.length * ROW_HEIGHT, availableHeight)
+
   if (status === 'loading') {
     return <Loading />
   }
@@ -273,22 +303,22 @@ export function EmployeeTable(props: EmployeeTableProps) {
     )
   }
 
-  const listHeight = Math.min(employees.length * ROW_HEIGHT, MAX_LIST_HEIGHT)
-
   return (
-    <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white shadow-sm">
-      <div className="min-w-[760px]">
+    <div className="h-full min-h-0 overflow-x-auto rounded-xl border border-slate-200 bg-white shadow-sm">
+      <div className="flex h-full min-w-[760px] flex-col">
         <TableHeader />
-        <List<RowData>
-          rowCount={employees.length}
-          rowHeight={ROW_HEIGHT}
-          rowComponent={rowComponent}
-          rowProps={rowProps}
-          rowKey={rowKey}
-          overscanCount={6}
-          style={{ height: listHeight }}
-          className="w-full"
-        />
+        <div ref={listAreaRef} className="min-h-0 flex-1">
+          <List<RowData>
+            rowCount={employees.length}
+            rowHeight={ROW_HEIGHT}
+            rowComponent={rowComponent}
+            rowProps={rowProps}
+            rowKey={rowKey}
+            overscanCount={6}
+            style={{ height: listHeight, width: '100%' }}
+            className="w-full"
+          />
+        </div>
       </div>
     </div>
   )

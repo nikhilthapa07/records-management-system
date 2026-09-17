@@ -118,8 +118,8 @@ function App() {
   const exportDisabled = filteredEmployees.length === 0
 
   return (
-    <div className="min-h-screen bg-slate-100 text-slate-900">
-      <main className="mx-auto w-full max-w-6xl px-4 py-8 sm:px-6">
+    <div className="flex h-dvh flex-col overflow-hidden bg-slate-100 text-slate-900">
+      <main className="mx-auto flex min-h-0 w-full max-w-6xl flex-1 flex-col px-4 py-6 sm:px-6">
         <header className="mb-6 flex flex-wrap items-center justify-between gap-4">
           <div className="flex items-center gap-3">
             <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-indigo-600 text-white shadow-sm">
@@ -245,7 +245,7 @@ function App() {
           </p>
         )}
 
-        <section aria-label="Employee list">
+        <section aria-label="Employee list" className="flex min-h-0 flex-1 flex-col">
           <EmployeeTable
             employees={pageEmployees}
             status={status}
