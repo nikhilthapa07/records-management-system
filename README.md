@@ -71,6 +71,7 @@ cp .env.example .env   # optional
 - **Explicit states** — loading skeleton, empty, no-results, and error-with-retry states.
 - **Code splitting** — the form modal is lazy-loaded into its own chunk.
 - **Responsive** — mobile-first layout (stacking header controls and pagination), `overflow-x-auto` table scroll for small screens, accessible label/aria landmarks throughout.
+- **Single-scroll shell** — the app fills exactly the viewport (the page itself never scrolls); the virtualized table stretches to the remaining height, so only one vertical scrollbar exists at a time. The list's height is measured live (`ResizeObserver`), so it follows window resizes and filter/pagination changes.
 
 ## Requirements coverage
 
