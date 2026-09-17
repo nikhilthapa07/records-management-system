@@ -70,6 +70,30 @@ cp .env.example .env   # optional
 - **Export** — currently visible (filtered) dataset as **CSV** (RFC 4180 quoting **and** formula-injection neutralization) or **JSON**.
 - **Explicit states** — loading skeleton, empty, no-results, and error-with-retry states.
 - **Code splitting** — the form modal is lazy-loaded into its own chunk.
+- **Responsive** — mobile-first layout (stacking header controls and pagination), `overflow-x-auto` table scroll for small screens, accessible label/aria landmarks throughout.
+
+## Requirements coverage
+
+The assignment's sections (from `Technical-Assessment-React-updated.docx`) and where each is implemented — all verified by the Vitest suite, the CDP smoke suite, or both.
+
+| Task section | Requirement | Where it lives / is verified |
+| --- | --- | --- |
+| §1 React architecture | Reusable, typed, single-responsibility functional components: App, EmployeeTable, EmployeeForm, SearchBar, FilterPanel, Pagination, Modal | `src/components/*` — each file is one component with one job |
+| §1 Hooks | `useState`, `useMemo`/`useCallback`, custom hooks; business logic not dumped in App | `src/hooks/useEmployees.ts` owns all state transitions; components stay dumb |
+| §2 API integration | Data fetched through a separate typed service file — no `fetch` in the UI | `src/services/employeeApi.ts` (the only place `fetch` lives); hook test mocks it |
+| §2 Explicit states | Loading, success, empty, and error with a clear user-friendly message | `EmployeeTable` states + `useEmployees` status mapping; covered by unit + CDP tests |
+| §3 Records table | Responsive table: ID, Name, Email, Department, Role, Status, Actions (Edit/Delete), with loading/empty states | `src/components/EmployeeTable.tsx` |
+| §4 Search & filter | Debounced search (name/email/role) + multi-select department filter applied with search | `SearchBar.tsx` (400 ms debounce) + `FilterPanel.tsx`; both in `useEmployees` |
+| §5 Pagination | Next/previous/jump/current/total records, works with search & filtering, "Showing X–Y of Z" | `Pagination.tsx` + derived pagination; boundary tests incl. page clamp |
+| §6 Create record | Modal form, required+format validation with clear messages, add to dataset, reset/close on success | `EmployeeForm.tsx` + `useEmployees.addEmployee`; 5-field validation tests |
+| §7 Delete record | Confirmation, removal, table + pagination update (incl. deleting the last row on a page) | `Modal.tsx` confirm flow + `useEmployees.removeEmployee`; last-row deletion tested |
+| §8 Data export | Export currently displayed (search/filtered) data as CSV and JSON, injection-safe | `src/utils/exportUtils.ts` + export buttons in `App.tsx` |
+| §9 Performance | Virtualization, memoization, derived state, lean critical path | react-window virtualization, `React.memo`/`useMemo`/`useCallback`, `React.lazy` form chunk; measured below |
+| §10 Security | XSS-safe rendering, validation & sanitization, no client secrets, CSV injection, dependency hygiene | `sanitize.ts`, `exportUtils.ts` (RFC 4180 + formula neutralization), env config, production CSP |
+| §11 UI / UX | Clean, professional, responsive UI; loading, error, empty states; confirmation dialogs | Tailwind responsive layout, horizontal-scroll table, stacking controls/pagination |
+| §12 Best practices | Single-responsibility components, business logic separated from UI, typed consistent code | Architecture section below; `eslint` + `tsc -b` clean |
+| §13 Edge cases | API failure, empty response, no-result search, invalid submit, last-row delete, empty filtered/export | Unit tests (71/71) + CDP smoke suite (18/18) |
+| Bonus | Automated tests, measurable performance work, extra hardening, excellent abstraction/UX | `npm run test` (Vitest), `scripts/` + measured table below, production CSP, accessible Modal |
 
 ## Architecture
 
@@ -113,8 +137,9 @@ src/
 - **No `dangerouslySetInnerHTML`** anywhere — all API/user data is rendered via React's auto-escaping.
 - **Input validation & sanitization** on every form submit (`sanitize.ts`): required, length-capped, email-format checked, control / zero-width characters stripped. Malformed data is rejected with clear messages.
 - **Defensive API layer** — records fetched from the network are validated/normalized; malformed rows are dropped rather than rendered; untrusted responses are shape-checked with friendly, non-sensitive error messages.
-- **CSV-injection prevention** — exported cells starting with `=`, `+`, `-` or `@` are prefixed with `'`; fields containing commas/quotes/newlines are quoted per RFC 4180. Verified by unit assertions (11/11).
+- **CSV-injection prevention** — exported cells starting with `=`, `+`, `-` or `@` are prefixed with `'`; fields containing commas/quotes/newlines are quoted per RFC 4180. Verified in the Vitest suite (`exportUtils.test.ts`).
 - **No secrets in the client** — the API base URL comes from `VITE_API_BASE_URL`; nothing sensitive is logged or committed.
+- **Authentication** — none is implemented, so no tokens exist to leak in code, URLs, logs or storage; if auth were added later, tokens would be held in memory only and never logged.
 - **Dependency hygiene** — `react-window` (virtualization), `@tanstack/react-query` (server state), `tailwindcss`, `lucide-react`; `@types/react-window` was removed because `react-window` v2 ships its own types.
 - **Content-Security-Policy shipped in production builds** — a build-only Vite plugin (`vite.config.ts` → `cspPlugin`) injects this CSP meta into `dist/index.html`:
   `default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self' https://dummyjson.com; img-src 'self' data:; object-src none; base-uri 'self'; frame-ancestors 'none'`
@@ -123,6 +148,8 @@ src/
 ## Measured performance (before / after)
 
 Numbers captured from the production build via headless Chrome (CDP) — the table lists the scored "before" points and what each optimisation achieved.
+
+> **Measurement tooling (repo):** `scripts/cdp-smoke.mjs` (18-check end-to-end suite) and `scripts/perf-measure.mjs` (cold-start probe). Run `npm run build && npm run preview -- --port 5174 &`, then `node scripts/cdp-smoke.mjs` / `node scripts/perf-measure.mjs`. Both accept `URL` / `CDP_PORT` / `PROFILE_DIR` / `CHROME` env overrides. The table below is from `perf-measure.mjs` against the production build; earlier standalone sanitization/CSV-injection assertions were folded into the Vitest suite, so no separate script is kept.
 
 | Metric | Before | After (measured) |
 | --- | --- | --- |
@@ -146,5 +173,5 @@ How each was achieved: virtualization (react-window), memoised rows/window so in
 - `npm run build` — `tsc -b` + Vite build, zero errors (bundle ~299 kB JS / 92 kB gzip, EmployeeForm split 5.8 kB chunk).
 - `npm run lint` — zero errors.
 - `npm run test` — **71/71** Vitest assertions across 10 files (security utils, debounce, components, hook).
-- Headless-Chrome (CDP) end-to-end smoke suite — 18/18 checks: virtualization subset rendering, pagination (next / jump / clamp), create validation (5 inline errors), create→edit→delete round trip via `useMutation` cache updates, debounced search (including multi-word full names), department multi-select + chips + clear, Escape-to-close, and real CSV/JSON downloads (160 rows verified).
-- Production build under CSP — zero console errors / violations; earlier security util assertions folded into the Vitest suite.
+- Headless-Chrome (CDP) end-to-end smoke suite — **18/18** checks (see `scripts/cdp-smoke.mjs`): virtualization subset rendering, pagination (next / jump / clamp), create validation (5 inline errors), create→edit→delete round trip via `useMutation` cache updates, debounced search (including multi-word full names), department multi-select + chips + clear, Escape-to-close, and real CSV/JSON downloads (160 rows verified).
+- Production build under CSP — zero console errors / violations; the earlier standalone sanitization/CSV-injection assertions were folded into the Vitest suite.
